@@ -38,14 +38,14 @@ typedef struct connection_table_row_ts
 //send the local port to the fw module
 static PyObject* fit(PyObject* self, PyObject* args){
         connection_table_row_t ctr;
-        int src_ip;
-        int dst_ip;
-        int src_port;
-        int dst_port;
-        int local_port;
+        unsigned int src_ip;
+        unsigned int dst_ip;
+        unsigned short src_port;
+        unsigned short dst_port;
+        unsigned short local_port;
 
 
-        if (!PyArg_ParseTuple(args, "iiiii",&src_ip, &src_port, &dst_ip, &dst_port, &local_port))
+        if (!PyArg_ParseTuple(args, "IHIHH",&src_ip, &src_port, &dst_ip, &dst_port, &local_port))
         {
                 return NULL;
         }
@@ -77,31 +77,31 @@ static PyObject* fit(PyObject* self, PyObject* args){
 //read the ip which belongs to the server
 static PyObject* fit2(PyObject* self, PyObject* args){
         connection_table_row_t ctr;
-        connection_table_row_t table[4];
+        connection_table_row_t table[4096];
         printf("size of ctr: %d\n", sizeof(ctr));
-        int ret;
-        int src_ip;
-        int src_port;
-        int fd;
+        unsigned int ret;
+        unsigned int src_ip;
+        unsigned short src_port;
+        unsigned int fd;
         PyObject* ret_py;
         fd = open("/sys/class/fw/conns/conns", O_RDONLY);
         if (fd < 0){
                 printf("failed to open\n");
                 return -1;
         }
-        if (!PyArg_ParseTuple(args, "ii", &src_ip, &src_port))
+        if (!PyArg_ParseTuple(args, "IH", &src_ip, &src_port))
         {
                 return NULL;
         }
-        if ((ret = read(fd, table, 4 * sizeof(connection_table_row_t))) < 0){
+        if ((ret = read(fd, table, 4096 * sizeof(connection_table_row_t))) < 0){
                 printf("failed to read\n");
                 printf("ret: %d", ret);
                 close(fd);
                 return -1;
         }
-        printf("ret: %d\n", ret);
-        printf("src ip: %d\n",&src_ip);
-        printf("src port: %d\n",src_port);
+        printf("ret: %u\n", ret);
+        printf("src ip: %u\n", src_ip);
+        printf("src port: %u\n",src_port);
         for(int i = 0; i < ret / sizeof(connection_table_row_t); i++){
                 if ((table[i].src_ip == src_ip) && (table[i].src_port == src_port) && (table[i].dst_port == 80))
                 {

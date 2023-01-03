@@ -104,7 +104,7 @@ int rule_check(struct sk_buff *skb, rule_t *rule, direction_t direction) {
 }
 
 int validate_prefix(__be32 prefix_mask, __u8 prefix_size) {
-	//checks that the mask is fine in little endiean (not sure why it works but the internet says)
+	//checks that the mask is fine in little endiean, using ULL to not overflow
 	return (1ULL << 32) - (1ULL << (32 - prefix_size)) == ntohl(prefix_mask);
 }
 //change 
@@ -406,25 +406,10 @@ ssize_t modify_rules(struct device *dev, struct device_attribute *attr, const ch
 
 ssize_t display_conns(struct device *dev, struct device_attribute *attr, char *buf)	//sysfs show implementation
 {
-	printk(KERN_INFO "size of ctr: %d", sizeof(connection_table_row_t));
 	int i = 0;
 	int ret;
 	connection_table_node* ct_node;
 	list_for_each_entry(ct_node, &connection_table_list, list) { // iterates through the log list to find the right log row matching the offset
-		printk(KERN_INFO "i: %d",i);
-		printk(KERN_INFO "dest port: %d", ct_node->ctr->dst_port);
-		printk(KERN_INFO "dest ip: %pI4", &ct_node->ctr->dst_ip);
-		printk(KERN_INFO "source port: %d", ct_node->ctr->src_port);
-		printk(KERN_INFO "source ip: %pI4",&ct_node->ctr->src_ip);
-		//+ (i * sizeof(connection_table_row_t)
-		/*
-		if (ret = copy_to_user(buf, &(ct_node->ctr), sizeof(connection_table_row_t))) { // send the data to the user through 'copy_to_user'
-			printk(KERN_INFO "copy err,i: %d\n",i);
-			printk(KERN_INFO "ret: %d",ret);
-        	return (-1) * ret;
-			}
-		}
-		*/
 		memcpy(buf + (i * sizeof(connection_table_row_t)), (ct_node->ctr),sizeof(connection_table_row_t));
 		i++;	
 	
@@ -433,32 +418,10 @@ ssize_t display_conns(struct device *dev, struct device_attribute *attr, char *b
 	return i * sizeof(connection_table_row_t);
 }
 
-/*
 
-ssize_t display_http(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)	//sysfs show implementation
-{
-	connection_table_row_t* ctr = (connection_table_row_t*)buf;
-	connection_table_node* ct_node;
-	connection_table_row_t ctr_temp;
-			list_for_each_entry(ct_node, &connection_table_list, list){
-					ctr_temp = ct_node->ctr;
-					if ((ctr_temp.src_ip == ctr->src_ip)  && (ctr_temp.src_port == ctr->src_port) && (ctr_temp.local_port == ctr->local_port))
-					{
-						return 0;
-					}
-				}
-	printk(KERN_INFO "No connection found");
-	return 0;
-}
-*/
 ssize_t modify_http(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)	//sysfs store implementation
 {
-	printk(KERN_INFO "started modify_http");
 	connection_table_row_t* new_ctr = (connection_table_row_t*)buf;
-	printk(KERN_INFO "dest port: %d", new_ctr->dst_port);
-		printk(KERN_INFO "dest ip: %pI4", &new_ctr->dst_ip);
-		printk(KERN_INFO "source port: %d", new_ctr->src_port);
-		printk(KERN_INFO "source ip: %pI4", &new_ctr->src_ip);
 	connection_table_node* ct_node;
 	connection_table_row_t* ctr_temp;
 			list_for_each_entry(ct_node, &connection_table_list, list){
@@ -467,8 +430,6 @@ ssize_t modify_http(struct device *dev, struct device_attribute *attr, const cha
 					{
 						ct_node->ctr->local_port = new_ctr->local_port;
 						ct_node->ctr->twin->local_port = new_ctr->local_port;
-						printk(KERN_INFO "changed local_port: %d",ct_node->ctr->local_port);
-						printk(KERN_INFO "changed twin local_port: %d",ct_node->ctr->twin->local_port);
 						return count;
 					}
 				}
@@ -489,7 +450,6 @@ static struct file_operations fops= {
 
 static unsigned int fw_hook(void *priv, struct sk_buff *skb, const struct nf_hook_state *state) {
     
-    //printk(KERN_INFO "===============================");
     struct ethhdr *eth_header = eth_hdr(skb);
     if (eth_header->h_proto != htons(ETH_P_IP))
     {
@@ -498,12 +458,9 @@ static unsigned int fw_hook(void *priv, struct sk_buff *skb, const struct nf_hoo
     struct iphdr *ip_header = ip_hdr(skb);
     prot_t packet_protocol = ip_header->protocol;
     int i;
-	//printk(KERN_INFO "source: %pI4 , dest: %pI4", &ip_header->saddr, &ip_header->daddr);
-	//printk(KERN_INFO "prot: %d, %d", ip_header->protocol,ntohs(ip_header->protocol));
-	//printk(KERN_INFO "is TCP: %d", ip_header->protocol == PROT_TCP);
-    if (ip_check(ip_header->daddr,LOOPBACK_IP, LOOPBACK_MASK))
+    if(ip_check(ip_header->daddr,LOOPBACK_IP, LOOPBACK_MASK))
     {
-        //return NF_ACCEPT;
+        return NF_ACCEPT;
     }
 	
     
@@ -521,201 +478,45 @@ static unsigned int fw_hook(void *priv, struct sk_buff *skb, const struct nf_hoo
     if ((packet_protocol == PROT_TCP) && (tcp_flag_word(tcp_hdr(skb)) & TCP_FLAG_ACK)) {
         printk(KERN_INFO "===============================");
 		struct tcphdr *tcp_header = tcp_hdr(skb);
-		//printk(KERN_INFO "got tcp");
-		//printk(KERN_INFO "dest port: %d", ntohs(tcp_header->dest));
-		printk(KERN_INFO "dest port: %d", ntohs(tcp_hdr(skb)->dest));
-		printk(KERN_INFO "dest ip: %pI4",&ip_hdr(skb)->daddr);
-		printk(KERN_INFO "source port: %d", ntohs(tcp_hdr(skb)->source));
-		printk(KERN_INFO "source ip: %pI4",&ip_hdr(skb)->saddr);
-		
-		if ((ntohs(tcp_header->dest) == 80))
-		{
-			//printk(KERN_INFO "got http");
-			//printk(KERN_INFO "dest port: %d", ntohs(tcp_hdr(skb)->dest));
-			//printk(KERN_INFO "dest ip: %pI4",&ip_hdr(skb)->daddr);
-			//printk(KERN_INFO "source port: %d", ntohs(tcp_hdr(skb)->source));
-			//printk(KERN_INFO "source ip: %pI4",&ip_hdr(skb)->saddr);
-			//change_dest(skb,LOOPBACK_IP,800);
-			
-			
-			
-			
-			
-			
-			
-			
-			if ((tcp_flag_word(tcp_header) & (TCP_FLAG_ACK | TCP_FLAG_SYN)) == TCP_FLAG_SYN)
-			{
-				//printk(KERN_INFO "SYN");
-			}
-			else if ((tcp_flag_word(tcp_header) & (TCP_FLAG_ACK | TCP_FLAG_SYN)) == TCP_FLAG_ACK){
-				//printk(KERN_INFO "ACK");
-			}
-			else if (tcp_flag_word(tcp_header) & (TCP_FLAG_ACK | TCP_FLAG_SYN))
-			{
-				//printk(KERN_INFO "SYN, ACK");
-			}
-			if (tcp_flag_word(tcp_header) & TCP_FLAG_FIN)
-			{
-				//printk(KERN_INFO "FIN");
-			}
-			
-			
-			//return NF_ACCEPT;
-		}
-		if (ntohs(tcp_header->source) == 800)
-		{
-			//printk(KERN_INFO "send http");
-			//printk(KERN_INFO "dest port: %d", ntohs(tcp_hdr(skb)->dest));
-			//printk(KERN_INFO "dest ip: %pI4",&ip_hdr(skb)->daddr);
-			//printk(KERN_INFO "source port: %d", ntohs(tcp_hdr(skb)->source));
-			//printk(KERN_INFO "source ip: %pI4",&ip_hdr(skb)->saddr);
-			//change_source(skb,LOOPBACK_IP,80);
-			//return NF_ACCEPT;
-
-		}
-		
-		if (ntohs(tcp_header->dest) == 443)
-		{
-			//printk(KERN_INFO "got https");
-		}
-		
-		
 		//check connection table
-		if (tcp_flag_word(tcp_header) & (TCP_FLAG_ACK))
-		{
-			unsigned int ret;
-			printk(KERN_INFO "staring dt check");
-			connection_table_node* ct_node;
-			connection_table_row_t* ctr;
-			list_for_each_entry(ct_node, &connection_table_list, list){
-					ctr = ct_node->ctr;
-					if ((ctr->src_ip == ip_header->saddr) && (ctr->dst_ip == ip_header->daddr) && (ctr->src_port == ntohs(tcp_header->source)) && ((ctr->dst_port == ntohs(tcp_header->dest))))
+		unsigned int ret;
+		printk(KERN_INFO "staring dt check");
+		connection_table_node* ct_node;
+		connection_table_row_t* ctr;
+		list_for_each_entry(ct_node, &connection_table_list, list){
+				ctr = ct_node->ctr;
+				if ((ctr->src_ip == ip_header->saddr) && (ctr->dst_ip == ip_header->daddr) && (ctr->src_port == ntohs(tcp_header->source)) && ((ctr->dst_port == ntohs(tcp_header->dest))))
+				{
+					ret = NF_ACCEPT; //update_state(tcp_header, &(ct_node->ctr));
+					//del_closed_conns();
+					if ((ret == NF_ACCEPT) && (ntohs(tcp_header->dest) == 80))
 					{
-						ret = 1; //update_state(tcp_header, &(ct_node->ctr));
-						//del_closed_conns();
-						printk(KERN_INFO "passed dt check");
-						if ((ret == NF_ACCEPT) && (ntohs(tcp_header->dest) == 80))
-						{
-							printk(KERN_INFO "got from user, changing the destenation to local");
-							change_dest(skb,IN_IP,800);
-							
-							printk(KERN_INFO "new dest port: %d", ntohs(tcp_hdr(skb)->dest));
-							printk(KERN_INFO "new dest ip: %pI4",&ip_hdr(skb)->daddr);
-							printk(KERN_INFO "new source port: %d", ntohs(tcp_hdr(skb)->source));
-							printk(KERN_INFO "new source ip: %pI4",&ip_hdr(skb)->saddr);
-
-							return NF_ACCEPT;
-						}
-						
-						if ((ret == NF_ACCEPT) && (ntohs(tcp_header->source) == 80))
-						{
-							printk(KERN_INFO "got from server, changing the destenation to local");
-							change_dest(skb,OUT_IP,ctr->local_port);
-							if (ctr->local_port == 1)
-							{
-								printk(KERN_INFO "got local 1, twin: %d",ctr->twin->local_port);
-								printk(KERN_INFO "twin dst ip: %pI4", &ctr->twin->dst_ip);
-								change_dest(skb,OUT_IP, ctr->twin->local_port);
-							}
-							
-							printk(KERN_INFO "new dest port: %d", ntohs(tcp_hdr(skb)->dest));
-							printk(KERN_INFO "new dest ip: %pI4",&ip_hdr(skb)->daddr);
-							printk(KERN_INFO "new source port: %d", ntohs(tcp_hdr(skb)->source));
-							printk(KERN_INFO "new source ip: %pI4",&ip_hdr(skb)->saddr);
-							return NF_ACCEPT;
-
-							//go to ctr.twin to find where dts_port == 80 && local_port == tcp_header->source
-							//change to fake packet
-							//return NF_ACCEPT
-						}
-						
-						
+					change_dest(skb,IN_IP,800);
 						return NF_ACCEPT;
 					}
+						
+					if ((ret == NF_ACCEPT) && (ntohs(tcp_header->source) == 80))
+					{
+						printk(KERN_INFO "got from server, changing the destenation to local");
+						change_dest(skb,OUT_IP,ctr->local_port);
+						if (ctr->local_port == 1)
+						{
+							change_dest(skb,OUT_IP, ctr->twin->local_port);
+						}	
+						return NF_ACCEPT;
+
+					}			
+					return ret;
 				}
-			printk(KERN_INFO "failed dt check");
-			return NF_DROP;
 		}
-		
-        
-        
+		return NF_DROP;   
     }
-	//printk(KERN_INFO "table size: %d", table_size);
-	//printk(KERN_INFO "entering direction");
-	if (packet_protocol == PROT_TCP)
-	{
-		printk(KERN_INFO "===============================");
-		struct tcphdr *tcp_header = tcp_hdr(skb);
-		connection_table_row_t* ctr = kmalloc(sizeof(connection_table_row_t), GFP_KERNEL);
-		connection_table_row_t* ctr_twin = kmalloc(sizeof(connection_table_row_t), GFP_KERNEL);
-
-		ctr->src_ip = ip_header->saddr;
-		ctr->dst_ip = ip_header->daddr;
-		ctr->src_port = ntohs(tcp_header->source);
-		ctr->dst_port = ntohs(tcp_header->dest);
-		ctr->state = STATE_SYN_SENT;
-		ctr->local_port = 0;
-
-		ctr_twin->dst_ip = ip_header->saddr;
-		ctr_twin->src_ip = ip_header->daddr;
-		ctr_twin->dst_port = ntohs(tcp_header->source);
-		ctr_twin->src_port = ntohs(tcp_header->dest);
-		ctr_twin->state = STATE_LISTEN;
-		ctr_twin->local_port = 0;
-
-		ctr->twin = ctr_twin;
-		ctr_twin->twin = ctr;
-		if ((ntohs(tcp_header->dest) == 80))
-		{
-			//change_dest(skb,LOOPBACK_IP,800);
-			ctr->local_port = 1;
-			ctr_twin->local_port = 1;
-			add_connection(ctr);
-			add_connection(ctr_twin);
-			printk(KERN_INFO "adding new SYN");
-			printk(KERN_INFO "dest port: %d", ntohs(tcp_hdr(skb)->dest));
-			printk(KERN_INFO "dest ip: %pI4",&ip_hdr(skb)->daddr);
-			printk(KERN_INFO "source port: %d", ntohs(tcp_hdr(skb)->source));
-			printk(KERN_INFO "source ip: %pI4",&ip_hdr(skb)->saddr);
-
-			printk(KERN_INFO "changing SYN packet");
-			change_dest(skb,IN_IP,800);
-
-			printk(KERN_INFO "new dest port: %d", ntohs(tcp_hdr(skb)->dest));
-			printk(KERN_INFO "new dest ip: %pI4",&ip_hdr(skb)->daddr);
-			printk(KERN_INFO "new source port: %d", ntohs(tcp_hdr(skb)->source));
-			printk(KERN_INFO "new source ip: %pI4",&ip_hdr(skb)->saddr);
-			
-
-			return NF_ACCEPT;
-		}
-		if (1 /*(ret == NF_ACCEPT) && (ntohs(tcp_header->source) == 80)*/)
-		{
-			//go to ctr.twin to find where dts_port == 80 && local_port == tcp_header->source
-			//change to fake packet
-			//return NF_ACCEPT
-		}
-
-		add_connection(ctr);
-		add_connection(ctr_twin);
-		printk(KERN_INFO "adding new SYN");
-		printk(KERN_INFO "dest port: %d", ntohs(tcp_hdr(skb)->dest));
-		printk(KERN_INFO "dest ip: %pI4",&ip_hdr(skb)->daddr);
-		printk(KERN_INFO "source port: %d", ntohs(tcp_hdr(skb)->source));
-		printk(KERN_INFO "source ip: %pI4",&ip_hdr(skb)->saddr);
-		
-	}
-	
-
-
 	direction_t direction = DIRECTION_OUT;
 	if (strcmp(state->in->name, IN_NET_DEVICE_NAME) == 0) {
 		direction = DIRECTION_IN;
 	} 
-	//printk(KERN_INFO "passed direction");
     for (i = 0; i < table_size; i++) {
-        if (rule_check(skb, &rules_table[i],direction)) {
+        if (rule_check(skb, &rules_table[i], direction)) {
             update_log(skb, i, rules_table[i].action);
 			if ((packet_protocol == PROT_TCP) && (rules_table[i].action == NF_ACCEPT))
 			{
@@ -739,6 +540,11 @@ static unsigned int fw_hook(void *priv, struct sk_buff *skb, const struct nf_hoo
 
 				ctr->twin = ctr_twin;
 				ctr_twin->twin = ctr;
+				if ((ntohs(tcp_header->dest) == 80)){
+					ctr->local_port = 1;
+					ctr_twin->local_port = 1;
+					change_dest(skb,IN_IP,800);
+				}
 				add_connection(ctr);
 				add_connection(ctr_twin);
 			}
@@ -746,52 +552,29 @@ static unsigned int fw_hook(void *priv, struct sk_buff *skb, const struct nf_hoo
             return rules_table[i].action;
         }
     }
-	//printk(KERN_INFO "log no mathc");
     update_log(skb, REASON_NO_MATCHING_RULE, NF_DROP);
-    return NF_ACCEPT; //TODO: default?
+    return NF_DROP; 
 }
 
 static unsigned int local_hook(void *priv, struct sk_buff *skb, const struct nf_hook_state *state) {
     
-    struct ethhdr *eth_header = eth_hdr(skb);
-    if (eth_header->h_proto != htons(ETH_P_IP))
-    {
-		//printk(KERN_INFO "local hook: not ip");
-        //return NF_ACCEPT;
-    }
     struct iphdr *ip_header = ip_hdr(skb);
     prot_t packet_protocol = ip_header->protocol;
-	//printk(KERN_INFO "source: %pI4 , dest: %pI4", &ip_header->saddr, &ip_header->daddr);
-	//printk(KERN_INFO "prot: %d, %d", ip_header->protocol,ntohs(ip_header->protocol));
-	//printk(KERN_INFO "is TCP: %d", ip_header->protocol == PROT_TCP);
     if (ip_check(ip_header->daddr,LOOPBACK_IP, LOOPBACK_MASK))
     {
-        //return NF_ACCEPT;
+        return NF_ACCEPT;
     }
 	
     
 	if ((packet_protocol != PROT_TCP)){
-		//printk(KERN_INFO "local hook: found not tcp packet");
         return NF_ACCEPT;
     }
-	printk(KERN_INFO "===============================");
 
-    struct tcphdr *tcp_header = tcp_hdr(skb);
-	printk(KERN_INFO "local hook: dest port: %d", ntohs(tcp_hdr(skb)->dest));
-	printk(KERN_INFO "local hook: dest ip: %pI4",&ip_hdr(skb)->daddr);
-	printk(KERN_INFO "local hook: source port: %d", ntohs(tcp_hdr(skb)->source));
-	printk(KERN_INFO "local hook: source ip: %pI4",&ip_hdr(skb)->saddr);
-	if ((tcp_flag_word(tcp_hdr(skb)) & (TCP_FLAG_ACK | TCP_FLAG_SYN)) == TCP_FLAG_SYN)
-	{
-		printk(KERN_INFO "SYN packet");
-	}
-	
+    struct tcphdr *tcp_header = tcp_hdr(skb);	
 	if(ntohs(tcp_header->source) == 800)
 	{
-		printk(KERN_INFO "local hook: packet is from http user program port: %d", ntohs(tcp_header->source));
 		if (ntohs(tcp_header->dest) != 80)
 		{
-			printk(KERN_INFO "local hook: got for user, changing the source to server");
 			unsigned short found_bool = 1;
 			connection_table_node* ct_node;
 			connection_table_row_t* ctr_temp;
@@ -801,68 +584,24 @@ static unsigned int local_hook(void *priv, struct sk_buff *skb, const struct nf_
 				{
 					change_source(skb,ctr_temp->src_ip,ctr_temp->src_port);
 					found_bool = 0;
-					printk(KERN_INFO "local hook: new dest port: %d", ntohs(tcp_hdr(skb)->dest));
-					printk(KERN_INFO "local hook: new dest ip: %pI4",&ip_hdr(skb)->daddr);
-					printk(KERN_INFO "local hook: new source port: %d", ntohs(tcp_hdr(skb)->source));
-					printk(KERN_INFO "local hook: new source ip: %pI4",&ip_hdr(skb)->saddr);
 					return NF_ACCEPT;
 				}
 			}
 
-			printk(KERN_INFO "local hook: didnt find fit ctr");
 		}
 		else {
-			printk(KERN_INFO "local hook: ERROR: got for server and expected to user, changing the source to client");
+			printk(KERN_INFO "local hook: ERROR: got for server and expected to user");
 			
-			unsigned short found_bool = 1;
-			connection_table_node* ct_node;
-			connection_table_row_t* ctr_temp;
-			list_for_each_entry(ct_node, &connection_table_list, list){
-				ctr_temp = ct_node->ctr;
-				if (found_bool && (ctr_temp->dst_ip == ip_header->daddr) && (ctr_temp->dst_port == 80) && (ctr_temp->local_port == ntohs(tcp_header->source)))
-				{
-					change_source(skb,ctr_temp->src_ip,ctr_temp->src_port);
-					found_bool = 0;
-					printk(KERN_INFO "local hook: new dest port: %d", ntohs(tcp_hdr(skb)->dest));
-					printk(KERN_INFO "local hook: new dest ip: %pI4",&ip_hdr(skb)->daddr);
-					printk(KERN_INFO "local hook: new source port: %d", ntohs(tcp_hdr(skb)->source));
-					printk(KERN_INFO "local hook: new source ip: %pI4",&ip_hdr(skb)->saddr);
-					return NF_ACCEPT;
-				}
-			}
-
-			printk(KERN_INFO "local hook: didnt find fit ctr");
 		}
 		return NF_ACCEPT;
 	}
 
 	else{
-		printk(KERN_INFO "local hook: packet is from http user program port: %d", ntohs(tcp_header->source));
 		if (ntohs(tcp_header->dest) != 80)
 		{
-			printk(KERN_INFO "local hook: ERROR got for user and excpected to server, changing the source to server");
-			unsigned short found_bool = 1;
-			connection_table_node* ct_node;
-			connection_table_row_t* ctr_temp;
-			list_for_each_entry(ct_node, &connection_table_list, list){
-				ctr_temp = ct_node->ctr;
-				if (found_bool && (ctr_temp->dst_ip == ip_header->daddr) && (ctr_temp->dst_port == ntohs(tcp_header->dest)) && (ctr_temp->src_port == 80))
-				{
-					change_source(skb,ctr_temp->src_ip,ctr_temp->src_port);
-					found_bool = 0;
-					printk(KERN_INFO "local hook: new dest port: %d", ntohs(tcp_hdr(skb)->dest));
-					printk(KERN_INFO "local hook: new dest ip: %pI4",&ip_hdr(skb)->daddr);
-					printk(KERN_INFO "local hook: new source port: %d", ntohs(tcp_hdr(skb)->source));
-					printk(KERN_INFO "local hook: new source ip: %pI4",&ip_hdr(skb)->saddr);
-					return NF_ACCEPT;
-				}
-			}
-
-			printk(KERN_INFO "local hook: didnt find fit ctr");
+			printk(KERN_INFO "local hook: ERROR got for user and excpected to server");
 		}
 		else {
-			printk(KERN_INFO "local hook: got for server, changing the source to client");
-			
 			unsigned short found_bool = 1;
 			connection_table_node* ct_node;
 			connection_table_row_t* ctr_temp;
@@ -872,15 +611,9 @@ static unsigned int local_hook(void *priv, struct sk_buff *skb, const struct nf_
 				{
 					change_source(skb,ctr_temp->src_ip,ctr_temp->src_port);
 					found_bool = 0;
-					printk(KERN_INFO "local hook: new dest port: %d", ntohs(tcp_hdr(skb)->dest));
-					printk(KERN_INFO "local hook: new dest ip: %pI4",&ip_hdr(skb)->daddr);
-					printk(KERN_INFO "local hook: new source port: %d", ntohs(tcp_hdr(skb)->source));
-					printk(KERN_INFO "local hook: new source ip: %pI4",&ip_hdr(skb)->saddr);
 					return NF_ACCEPT;
 				}
 			}
-
-			printk(KERN_INFO "local hook: didnt find fit ctr");
 		}
 		return NF_ACCEPT;
 	}

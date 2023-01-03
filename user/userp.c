@@ -59,30 +59,41 @@ typedef struct {
 	unsigned int   	count;        	// counts this line's hits
 } log_row_t;
 
+typedef enum {
+	STATE_ERROR = -1,
+	STATE_LISTEN = 0,
+	STATE_SYN_SENT = 1,
+	STATE_SYN_RECIVED = 2,
+	STATE_CLOSE_WAIT = 3,
+	STATE_LAST_ACK = 4,
+	STATE_FIN_WAIT_1 = 5,
+	STATE_FIN_WAIT_2 = 6,
+	STATE_CLOSED = 7,
+	STATE_ESTABLISHED_TCP = 8,
+	STATE_ESTABLISHED_FTP_CON = 9,
+	STATE_ESTABLISHED_FTP_DATA = 10,
+	STATE_ESTABLISHED_HTTP = 11,
+} state_t;
+
+typedef struct connection_table_row_ts
+{
+	unsigned int	src_ip;
+	unsigned int	dst_ip;
+	unsigned short	src_port; 
+	unsigned short	dst_port; 
+	unsigned short 	local_port;
+	state_t state;
+	struct connection_table_row_ts* twin;
+} connection_table_row_t;
+
 rule_t rule[50];
 int num_of_rules = 0;
 
 
-unsigned long ip_calc(long b1, long b2, long b3, long b4){
-    return b1 + (b2 << 8) + (b3 << 16) + (b4 << 24);
-}
-int ip_b1(unsigned long ip){
-    return ip % 256;
-}
-int ip_b2(unsigned long ip){
-    return (ip >> 8) % 256;
-}
-int ip_b3(unsigned long ip){
-    return (ip >> 16) % 256;
-}
-int ip_b4(unsigned long ip){
-    return (ip >> 24) % 256;
-}
-
-unsigned long prefix_calc(long size){
+unsigned int prefix_calc(int size){
     
     int count = 0;
-    unsigned long ret = 0;
+    unsigned int ret = 0;
     while ((32 >= size) && (size > 0))
     {
         if(size >= 8){
@@ -105,20 +116,14 @@ static PyObject* fit4(PyObject* self, PyObject* args){
     PyObject* tmp;
     log_row_t current;
     unsigned long out_timestamp;
-    int out_protocol;
-    int out_action;
-    int out_src_ip1;
-    int out_src_ip2;
-    int out_src_ip3;
-    int out_src_ip4;
-    int out_src_port;
-    int out_dst_ip1;
-    int out_dst_ip2;
-    int out_dst_ip3;
-    int out_dst_ip4;
-    int out_dst_port;
+    unsigned short out_protocol;
+    unsigned short out_action;
+    unsigned int out_src_ip;
+    unsigned short out_src_port;
+    unsigned int out_dst_ip;
+    unsigned short out_dst_port;
     int out_reason;
-    int out_count;
+    unsigned int out_count;
     int fd;
     int ret = 1;
     fd = open("/dev/firewall_log",O_RDONLY);
@@ -143,18 +148,13 @@ static PyObject* fit4(PyObject* self, PyObject* args){
         out_timestamp = current.timestamp;
         out_protocol = current.protocol;
         out_action = current.action;
-        out_src_ip1 = ip_b1(current.src_ip);
-        out_src_ip2 = ip_b2(current.src_ip);
-        out_src_ip3 = ip_b3(current.src_ip);
-        out_src_ip4 = ip_b4(current.src_ip);
+        out_src_ip = current.src_ip;
         out_src_port = current.src_port;
-        out_dst_ip1 = ip_b1(current.dst_ip);
-        out_dst_ip2 = ip_b2(current.dst_ip);
-        out_dst_ip3 = ip_b3(current.dst_ip);
-        out_dst_ip4 = ip_b4(current.dst_ip);
+        out_dst_ip = current.dst_ip;
+        out_dst_port = current.dst_port;
         out_reason = current.reason;
         out_count = current.count;
-        tmp = Py_BuildValue("[i,i,i,i,i,i,i,i,i,i,i,i,i,i,i]", out_timestamp, out_protocol, out_action, out_src_ip1, out_src_ip2,out_src_ip3,out_src_ip4, out_src_port, out_dst_ip1, out_dst_ip2, out_dst_ip3, out_dst_ip4, out_dst_port, out_reason,out_count);
+        tmp = Py_BuildValue("[k,H,H,I,H,I,H,i,I]", out_timestamp, out_protocol, out_action, out_src_ip, out_src_port, out_dst_ip, out_dst_port, out_reason,out_count);
         PyList_Append(ret_py,tmp);
     }
     close(fd);
@@ -169,31 +169,24 @@ static PyObject* fit2(PyObject* self, PyObject* args){
     PyObject* input;
     PyObject* tmp;
     const char* inp_name;
-    long inp_direction;
-    long inp_src_ip1;
-    long inp_src_ip2;
-    long inp_src_ip3;
-    long inp_src_ip4;
-    long inp_src_port;
-    long inp_dst_ip1;
-    long inp_dst_ip2;
-    long inp_dst_ip3;
-    long inp_dst_ip4;
-    long inp_dst_port;
-    long inp_src_prefix_size;
-    long inp_dst_prefix_size;
-    long inp_protocol;
-    long inp_ack;
-    long inp_action;
+    unsigned short inp_direction;
+    unsigned int inp_src_ip;
+    unsigned short inp_src_port;
+    unsigned int inp_dst_ip;
+    unsigned short inp_dst_port;
+    unsigned char inp_src_prefix_size;
+    unsigned char inp_dst_prefix_size;
+    unsigned char inp_protocol;
+    unsigned short inp_ack;
+    unsigned char inp_action;
 
-   if(!PyArg_ParseTuple(args, "sllllllllLLllllll", &inp_name,&inp_direction, &inp_src_ip1,&inp_src_ip2,&inp_src_ip3,&inp_src_ip4, &inp_src_prefix_size,&inp_dst_ip1,
-            &inp_dst_ip2,&inp_dst_ip3,&inp_dst_ip4,
+   if(!PyArg_ParseTuple(args, "sHIBIBHHBHB", &inp_name, &inp_direction, &inp_src_ip, &inp_src_prefix_size,&inp_dst_ip,
             &inp_dst_prefix_size,&inp_src_port, &inp_dst_port, &inp_protocol,&inp_ack,&inp_action)){
             return NULL;
         }
     strcpy(rule[num_of_rules].rule_name, inp_name);
-    rule[num_of_rules].src_ip = ip_calc(inp_src_ip1,inp_src_ip2,inp_src_ip3,inp_src_ip4);
-    rule[num_of_rules].dst_ip = ip_calc(inp_dst_ip1,inp_dst_ip2,inp_dst_ip3,inp_dst_ip4);
+    rule[num_of_rules].src_ip = inp_src_ip;
+    rule[num_of_rules].dst_ip = inp_dst_ip;
     rule[num_of_rules].src_port = inp_src_port;
     rule[num_of_rules].dst_port = inp_dst_port;
     rule[num_of_rules].direction = inp_direction; 
@@ -223,7 +216,6 @@ static PyObject* fit3(PyObject* self, PyObject* args){
         printf("failed to write\n");
         return -1;
     }
-    printf("ret write: %d\n",ret);
     close(fd);
     return PyLong_FromLong(1);
 }
@@ -233,22 +225,16 @@ static PyObject* fit(PyObject* self, PyObject* args){
     PyObject* tmp;
     PyObject* ret_py;
     const char* out_name;
-    int out_direction;
-    int out_src_ip1;
-    int out_src_ip2;
-    int out_src_ip3;
-    int out_src_ip4;
-    int out_src_port;
-    int out_dst_ip1;
-    int out_dst_ip2;
-    int out_dst_ip3;
-    int out_dst_ip4;
-    int out_dst_port;
-    int out_src_prefix_size;
-    int out_dst_prefix_size;
-    int out_protocol;
-    int out_ack;
-    int out_action;
+    unsigned short out_direction;
+    unsigned int out_src_ip;
+    unsigned short out_src_port;
+    unsigned int out_dst_ip;
+    unsigned short out_dst_port;
+    unsigned char out_src_prefix_size;
+    unsigned char out_dst_prefix_size;
+    unsigned char out_protocol;
+    unsigned short out_ack;
+    unsigned char out_action;
     int fd;
     int ret;
     fd = open("/sys/class/fw/rules/rules", O_RDWR);
@@ -267,23 +253,16 @@ static PyObject* fit(PyObject* self, PyObject* args){
     for(int i = 0; i < ret / sizeof(rule_t); i++){
         out_name = r[i].rule_name;
         out_direction = r[i].direction;
-        out_src_ip1 = ip_b1(r[i].src_ip);
-        out_src_ip2 = ip_b2(r[i].src_ip);
-        out_src_ip3 = ip_b3(r[i].src_ip);
-        out_src_ip4 = ip_b4(r[i].src_ip);
+        out_src_ip = r[i].src_ip;
         out_src_port = r[i].src_port;
         out_src_prefix_size = r[i].src_prefix_size;
-        out_dst_ip1 = ip_b1(r[i].dst_ip);
-        out_dst_ip2 = ip_b2(r[i].dst_ip);
-        out_dst_ip3 = ip_b3(r[i].dst_ip);
-        out_dst_ip4 = ip_b4(r[i].dst_ip);
+        out_dst_ip = r[i].dst_ip;
         out_dst_port = r[i].dst_port;
         out_dst_prefix_size = r[i].dst_prefix_size;
         out_protocol = r[i].protocol;
         out_action = r[i].action;
         out_ack = r[i].ack;
-        tmp = Py_BuildValue("[s,i,i,i,i,i,i,i,i,i,i,i,i,i,i,i,i]", out_name,out_direction, out_src_ip1, out_src_ip2,out_src_ip3,out_src_ip4, out_src_prefix_size,out_dst_ip1,
-        out_dst_ip2, out_dst_ip3, out_dst_ip4, out_dst_prefix_size,out_protocol, out_src_port, out_dst_port,out_ack,out_action);
+        tmp = Py_BuildValue("[s,H,I,B,I,B,B,H,H,H,B]", out_name,out_direction, out_src_ip, out_src_prefix_size,out_dst_ip, out_dst_prefix_size,out_protocol, out_src_port, out_dst_port,out_ack,out_action);
         PyList_Append(ret_py,tmp);
     }
     return ret_py;
@@ -312,6 +291,53 @@ static PyObject* fit5(PyObject* self, PyObject* args){
     
 }
 
+//reset log table for load
+static PyObject* fit6(PyObject* self, PyObject* args){
+    num_of_rules = 0;
+    return PyLong_FromLong(1);
+    
+}
+
+//read conns
+static PyObject* fit7(PyObject* self, PyObject* args){
+    PyObject* tmp;
+    PyObject* ret_py;
+    unsigned int src_ip;
+    unsigned short src_port;
+    unsigned int dst_ip;
+    unsigned short dst_port;
+    short state;
+    int fd;
+    int ret;
+    fd = open("/sys/class/fw/conns/conns", O_RDONLY);
+    if (fd < 0){
+        printf("failed to open\n");
+        return -1;
+    }
+
+
+    connection_table_row_t ct[4096];
+    if ((ret = read(fd, ct, 4096 * sizeof(connection_table_row_t))) < 0){
+        printf("failed to read\n");
+        return -1;
+    }
+    ret_py = PyList_New(0);
+    for(int i = 0; i < ret / sizeof(connection_table_row_t); i++){
+        src_ip = ct[i].src_ip;
+        src_port = ct[i].src_port;
+        dst_ip = ct[i].dst_ip;
+        dst_port = ct[i].dst_port;
+        state = ct[i].state;
+        tmp = Py_BuildValue("[I,H,I,H,h]",src_ip,src_port,dst_ip,dst_port,state);
+        PyList_Append(ret_py,tmp);
+    }
+    return ret_py;
+
+
+
+
+}
+
 
 
 /*
@@ -323,6 +349,8 @@ static PyMethodDef _methods[] = {
         {"fit3", (PyCFunction)fit3, METH_VARARGS, PyDoc_STR("fit3")},
         {"fit4", (PyCFunction)fit4, METH_VARARGS, PyDoc_STR("fit4")},
         {"fit5", (PyCFunction)fit5, METH_VARARGS, PyDoc_STR("fit5")},
+        {"fit6", (PyCFunction)fit6, METH_VARARGS, PyDoc_STR("fit6")},
+        {"fit7", (PyCFunction)fit7, METH_VARARGS, PyDoc_STR("fit7")},
         {NULL, NULL, 0, NULL}   /* sentinel */
 };
 
