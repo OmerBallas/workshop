@@ -62,7 +62,8 @@ typedef enum {
 	MINOR_RULES    = 0,
 	MINOR_LOG      = 1,
 	MINOR_CONNS    = 2,
-	MINOR_HTTP		= 3,
+	MINOR_PROXY		= 3,
+	MINOR_FTP 		= 4,
 } minor_t;
 
 typedef enum {
@@ -133,6 +134,7 @@ typedef struct connection_table_row_ts
 	__be16	dst_port; 
 	__be16 	local_port;
 	state_t state;
+	state_t proxy_state;
 	struct connection_table_row_ts* twin;
 } connection_table_row_t;
 

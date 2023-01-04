@@ -35,7 +35,6 @@ typedef struct connection_table_row_ts
 	struct connection_table_row_ts* twin;
 } connection_table_row_t;
 
-
 //send the local port to the fw module
 static PyObject* fit(PyObject* self, PyObject* args){
         connection_table_row_t ctr;
@@ -56,6 +55,7 @@ static PyObject* fit(PyObject* self, PyObject* args){
         ctr.dst_port = dst_port;
         ctr.local_port = local_port;
         ctr.state = 0;
+        ctr.proxy_state = 0;
         ctr.twin = 0;
 
         int fd = open("/sys/class/fw/proxy_driver/proxy", O_WRONLY);
@@ -74,6 +74,7 @@ static PyObject* fit(PyObject* self, PyObject* args){
         close(fd);
         return PyLong_FromLong(1);
 }
+
 
 //read the ip which belongs to the server
 static PyObject* fit2(PyObject* self, PyObject* args){
@@ -100,8 +101,11 @@ static PyObject* fit2(PyObject* self, PyObject* args){
                 close(fd);
                 return -1;
         }
+        printf("ret: %u\n", ret);
+        printf("src ip: %u\n", src_ip);
+        printf("src port: %u\n",src_port);
         for(int i = 0; i < ret / sizeof(connection_table_row_t); i++){
-                if ((table[i].src_ip == src_ip) && (table[i].src_port == src_port) && (table[i].dst_port == 80))
+                if ((table[i].src_ip == src_ip) && (table[i].src_port == src_port) && (table[i].dst_port == 21))
                 {
                         ret_py = PyLong_FromLong(table[i].dst_ip);
                         close(fd);
@@ -111,6 +115,44 @@ static PyObject* fit2(PyObject* self, PyObject* args){
         }
         printf("didnt find fit ctr\n");
         return -1;
+}
+
+//send the new connection for the client to listen on
+static PyObject* fit3(PyObject* self, PyObject* args){
+        connection_table_row_t ctr;
+        unsigned int client_ip;
+        unsigned int server_ip;
+        unsigned short port_to_listen;
+
+
+        if (!PyArg_ParseTuple(args, "IIH",&client_ip, &server_ip, &port_to_listen))
+        {
+                return NULL;
+        }
+        ctr.src_ip = server_ip;
+        ctr.dst_ip = client_ip;
+        ctr.src_port = 20;
+        ctr.dst_port = port_to_listen;
+        ctr.local_port = 0;
+        ctr.state = 0;
+        ctr.proxy_state = 0;
+        ctr.twin = 0;
+
+        int fd = open("/sys/class/fw/ftp_driver/ftp", O_WRONLY);
+        if (fd < 0){
+                printf("failed to open\n");
+                close(fd);
+                return -1;
+        }
+        if (write(fd,&ctr, sizeof(connection_table_row_t)) < 0)
+        {
+                printf("failed write\n");
+                printf("%s\n", strerror(errno));
+                close(fd);
+                return -1;
+        }
+        close(fd);
+        return PyLong_FromLong(1);
 }
 
 
@@ -131,6 +173,7 @@ c python API
 static PyMethodDef _methods[] = {
         {"fit", (PyCFunction)fit, METH_VARARGS, PyDoc_STR("fit")},
         {"fit2", (PyCFunction)fit2, METH_VARARGS, PyDoc_STR("fit2")},
+        {"fit3", (PyCFunction)fit3, METH_VARARGS, PyDoc_STR("fit3")},
         {NULL, NULL, 0, NULL}   /* sentinel */
 };
 
@@ -139,7 +182,7 @@ c python API
 */
 static struct PyModuleDef _moduledef = {
         PyModuleDef_HEAD_INIT,
-        "http_driver",
+        "ftp_driver",
         NULL,
         -1,
         _methods
@@ -147,7 +190,7 @@ static struct PyModuleDef _moduledef = {
 /*
 c python API
 */
-PyMODINIT_FUNC PyInit_http_driver(void)
+PyMODINIT_FUNC PyInit_ftp_driver(void)
 {
     return PyModule_Create(&_moduledef);
 }

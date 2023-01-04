@@ -15,11 +15,14 @@ static struct class* fw_class = NULL;
 static struct device* rules_device = NULL;
 static struct device* log_device = NULL;
 static struct device* conns_device = NULL;
-static struct device* http_driver= NULL;
+static struct device* proxy_driver = NULL;
+static struct device* ftp_driver = NULL;
+
 
 static unsigned int num_logs = 0;
 
 
+//structs for list
 typedef struct {
 	struct list_head list;
 	log_row_t log_row;
@@ -32,22 +35,26 @@ typedef struct
 } connection_table_node;
 
 
+//list init
 struct list_head log_list = LIST_HEAD_INIT(log_list); // head of log list (for linux\list)
 struct list_head connection_table_list =  LIST_HEAD_INIT(connection_table_list); //head of connection table (for linux\list)
 
 
 
+//checks if the ips are equal under the mask
 int ip_check( __be32 ip1, __be32 ip2, __be32 mask) {
     if (mask == 0){ return 1;}
     return (ip1 & mask) == (ip2 & mask);
 }
 
+//check the port in the rule
 int port_check(unsigned short rport, __be16 pport) {
     if (rport == PORT_ANY) {return 1;}
     if (rport == PORT_ABOVE_1023) {return (ntohs(pport) >= 1023);}
     return rport == ntohs(pport);
 }
 
+//checks if the packet belongs to the rule
 int rule_check(struct sk_buff *skb, rule_t *rule, direction_t direction) {
     struct iphdr *ip_header = ip_hdr(skb);
     prot_t packet_protocol = ip_header->protocol;
@@ -148,7 +155,7 @@ int validate_rule(rule_t* rule) {
 }
 
 
-
+//adds a log row to the list
 void add_row(log_row_t log_row) {
 	log_list_node* log_node = kmalloc(sizeof(log_list_node), GFP_KERNEL);
 	log_node->log_row = log_row;
@@ -156,6 +163,7 @@ void add_row(log_row_t log_row) {
 	num_logs++;
 }
 
+//gets the packet, the action and the reason. log them.
 void update_log(struct sk_buff* skb, reason_t reason, __u8 action) {
     log_list_node *log_node;
     log_row_t row;
@@ -202,6 +210,7 @@ void update_log(struct sk_buff* skb, reason_t reason, __u8 action) {
 	add_row(row);
 }
 
+//frees the log.
 void free_log_list(void){
     log_list_node *log_node, *tmp_holder;
 	list_for_each_entry_safe(log_node, tmp_holder, &log_list, list) {
@@ -211,12 +220,14 @@ void free_log_list(void){
 	num_logs = 0;
 }
 
+//adds new connection to the list.
 void add_connection(connection_table_row_t* ctr) {
 	connection_table_node* ct_node = kmalloc(sizeof(connection_table_node), GFP_KERNEL);
 	ct_node->ctr = ctr;
 	list_add_tail(&ct_node->list, &connection_table_list);
 }
 
+//cleans the connections
 void free_connection_table_list(void){
     connection_table_node *ct_node, *tmp_holder;
 	list_for_each_entry_safe(ct_node, tmp_holder, &connection_table_list, list) {
@@ -226,6 +237,7 @@ void free_connection_table_list(void){
 		}
 }
 
+//deletes from the table the closed connections.
 void del_closed_conns(void){
 	connection_table_node *ct_node, *tmp_holder;
 	connection_table_row_t* ctr;
@@ -418,8 +430,8 @@ ssize_t display_conns(struct device *dev, struct device_attribute *attr, char *b
 	return i * sizeof(connection_table_row_t);
 }
 
-
-ssize_t modify_http(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)	//sysfs store implementation
+//adds to the connection table the port of the local process
+ssize_t modify_proxy(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)	//sysfs store implementation
 {
 	connection_table_row_t* new_ctr = (connection_table_row_t*)buf;
 	connection_table_node* ct_node;
@@ -437,10 +449,40 @@ ssize_t modify_http(struct device *dev, struct device_attribute *attr, const cha
 	return 0;
 }
 
+//adds the port that the clients listens of for ftp data transfer to the connection table.
+ssize_t modify_ftp(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)	//sysfs store implementation
+{
+	connection_table_row_t* ctr = kmalloc(sizeof(connection_table_row_t), GFP_KERNEL);
+	connection_table_row_t* ctr_twin = kmalloc(sizeof(connection_table_row_t), GFP_KERNEL);
+
+	ctr->src_ip = ((connection_table_row_t*)buf)->src_ip;
+	ctr->dst_ip = ((connection_table_row_t*)buf)->dst_ip;
+	ctr->src_port = ((connection_table_row_t*)buf)->src_port;
+	ctr->dst_port = ((connection_table_row_t*)buf)->dst_port;
+	ctr->state = STATE_SYN_SENT;
+	ctr->proxy_state = 0;
+	ctr->local_port = 0;
+
+	ctr_twin->dst_ip = ((connection_table_row_t*)buf)->src_ip;
+	ctr_twin->src_ip = ((connection_table_row_t*)buf)->dst_ip;
+	ctr_twin->dst_port = ((connection_table_row_t*)buf)->src_port;
+	ctr_twin->src_port = ((connection_table_row_t*)buf)->dst_port;
+	ctr_twin->state = STATE_LISTEN;
+	ctr_twin->proxy_state = 0;
+	ctr_twin->local_port = 0;
+
+	ctr->twin = ctr_twin;
+	ctr_twin->twin = ctr;
+	add_connection(ctr);
+	add_connection(ctr_twin);
+	return 0;
+}
+
 static DEVICE_ATTR(rules, S_IRUSR | S_IRGRP | S_IWUSR | S_IWGRP , display_rules, modify_rules);
 static DEVICE_ATTR(reset, S_IWUSR | S_IWGRP  , NULL, modify_logs);
 static DEVICE_ATTR(conns, S_IRUSR | S_IRGRP, display_conns, NULL);
-static DEVICE_ATTR(http, S_IWUSR | S_IWGRP ,NULL,  modify_http);
+static DEVICE_ATTR(proxy, S_IWUSR | S_IWGRP ,NULL,  modify_proxy);
+static DEVICE_ATTR(ftp, S_IWUSR | S_IWGRP ,NULL,  modify_ftp);
 
 
 static struct file_operations fops= {
@@ -448,26 +490,31 @@ static struct file_operations fops= {
     .read = display_logs
 };
 
+//the hook
 static unsigned int fw_hook(void *priv, struct sk_buff *skb, const struct nf_hook_state *state) {
     
+	//checks if the packet is ipv4
     struct ethhdr *eth_header = eth_hdr(skb);
     if (eth_header->h_proto != htons(ETH_P_IP))
     {
         return NF_ACCEPT;
     }
+
     struct iphdr *ip_header = ip_hdr(skb);
     prot_t packet_protocol = ip_header->protocol;
     int i;
+	//checks if the packet is loopback
     if(ip_check(ip_header->daddr,LOOPBACK_IP, LOOPBACK_MASK))
     {
         return NF_ACCEPT;
     }
 	
-    
+    //checks if the packet is not one of TCP,UDP,ICMP
 	if ((packet_protocol != PROT_TCP) && (packet_protocol != PROT_UDP) && (packet_protocol != PROT_ICMP)){
 
         return NF_ACCEPT;
     }
+	//checks for xmas packet
 	if ((packet_protocol == PROT_TCP) && ((tcp_flag_word(tcp_hdr(skb)) & (TCP_FLAG_FIN | TCP_FLAG_URG | TCP_FLAG_PSH)) == ((TCP_FLAG_FIN | TCP_FLAG_URG | TCP_FLAG_PSH))))
         {	
 			printk(KERN_INFO "found xms");
@@ -475,42 +522,83 @@ static unsigned int fw_hook(void *priv, struct sk_buff *skb, const struct nf_hoo
             return NF_DROP;
         }
     
+	//check connection table
     if ((packet_protocol == PROT_TCP) && (tcp_flag_word(tcp_hdr(skb)) & TCP_FLAG_ACK)) {
-        printk(KERN_INFO "===============================");
 		struct tcphdr *tcp_header = tcp_hdr(skb);
-		//check connection table
 		unsigned int ret;
-		printk(KERN_INFO "staring dt check");
 		connection_table_node* ct_node;
 		connection_table_row_t* ctr;
+		//loop on the connection
 		list_for_each_entry(ct_node, &connection_table_list, list){
+				
 				ctr = ct_node->ctr;
 				if ((ctr->src_ip == ip_header->saddr) && (ctr->dst_ip == ip_header->daddr) && (ctr->src_port == ntohs(tcp_header->source)) && ((ctr->dst_port == ntohs(tcp_header->dest))))
 				{
-					ret = NF_ACCEPT; //update_state(tcp_header, &(ct_node->ctr));
-					//del_closed_conns();
+					
+					ret = update_state(tcp_header, (ct_node->ctr));
+					del_closed_conns();
+
+					//redirect to http proxy, connection with client
 					if ((ret == NF_ACCEPT) && (ntohs(tcp_header->dest) == 80))
 					{
-					change_dest(skb,IN_IP,800);
+						change_dest(skb,IN_IP,800);
 						return NF_ACCEPT;
 					}
-						
+					
+					//redirect to http proxy, connection with server
 					if ((ret == NF_ACCEPT) && (ntohs(tcp_header->source) == 80))
 					{
-						printk(KERN_INFO "got from server, changing the destenation to local");
 						change_dest(skb,OUT_IP,ctr->local_port);
 						if (ctr->local_port == 1)
 						{
 							change_dest(skb,OUT_IP, ctr->twin->local_port);
 						}	
 						return NF_ACCEPT;
+					}
 
-					}			
+					//redirect to ftp proxy, connection with client
+					if ((ret == NF_ACCEPT) && (ntohs(tcp_header->dest) == 21))
+					{
+					change_dest(skb,IN_IP,210);
+						return NF_ACCEPT;
+					}
+					
+					//redirect to ftp proxy, connection with server
+					if ((ret == NF_ACCEPT) && (ntohs(tcp_header->source) == 21))
+					{
+						change_dest(skb,OUT_IP,ctr->local_port);
+
+						if (ctr->local_port == 1)
+						{
+							change_dest(skb,OUT_IP, ctr->twin->local_port);
+
+						}	
+						return NF_ACCEPT;
+					}
+
 					return ret;
 				}
 		}
 		return NF_DROP;   
     }
+
+	//check if this packet is the SYN of the data connection of tcp
+	//used for ftp data connection and not adding more tables if a SYN packet is resent.
+	if ((packet_protocol == PROT_TCP) && (ntohs(tcp_hdr(skb)->source) == 20))
+	{
+		connection_table_node* ct_node;
+		connection_table_row_t* ctr;
+		list_for_each_entry(ct_node, &connection_table_list, list){
+				ctr = ct_node->ctr;
+				if ((ctr->src_ip == ip_header->saddr) && (ctr->dst_ip == ip_header->daddr) && (ctr->src_port == ntohs(tcp_hdr(skb)->source)) && 
+				((ctr->dst_port == ntohs(tcp_hdr(skb)->dest))) && (ctr->state == STATE_SYN_SENT))
+				{
+					return NF_ACCEPT;
+				}
+		}
+	}
+
+	//deciding direction
 	direction_t direction = DIRECTION_OUT;
 	if (strcmp(state->in->name, IN_NET_DEVICE_NAME) == 0) {
 		direction = DIRECTION_IN;
@@ -518,6 +606,7 @@ static unsigned int fw_hook(void *priv, struct sk_buff *skb, const struct nf_hoo
     for (i = 0; i < table_size; i++) {
         if (rule_check(skb, &rules_table[i], direction)) {
             update_log(skb, i, rules_table[i].action);
+			//add to the dynamic connection table
 			if ((packet_protocol == PROT_TCP) && (rules_table[i].action == NF_ACCEPT))
 			{
 				struct tcphdr *tcp_header = tcp_hdr(skb);
@@ -529,6 +618,7 @@ static unsigned int fw_hook(void *priv, struct sk_buff *skb, const struct nf_hoo
 				ctr->src_port = ntohs(tcp_header->source);
 				ctr->dst_port = ntohs(tcp_header->dest);
 				ctr->state = STATE_SYN_SENT;
+				ctr->proxy_state = 0;
 				ctr->local_port = 0;
 
 				ctr_twin->dst_ip = ip_header->saddr;
@@ -536,6 +626,7 @@ static unsigned int fw_hook(void *priv, struct sk_buff *skb, const struct nf_hoo
 				ctr_twin->dst_port = ntohs(tcp_header->source);
 				ctr_twin->src_port = ntohs(tcp_header->dest);
 				ctr_twin->state = STATE_LISTEN;
+				ctr_twin->proxy_state = 0;
 				ctr_twin->local_port = 0;
 
 				ctr->twin = ctr_twin;
@@ -543,7 +634,16 @@ static unsigned int fw_hook(void *priv, struct sk_buff *skb, const struct nf_hoo
 				if ((ntohs(tcp_header->dest) == 80)){
 					ctr->local_port = 1;
 					ctr_twin->local_port = 1;
+					ctr->proxy_state = STATE_SYN_SENT;
+					ctr_twin->proxy_state = STATE_LISTEN;
 					change_dest(skb,IN_IP,800);
+				}
+				if ((ntohs(tcp_header->dest) == 21)){
+					ctr->local_port = 1;
+					ctr_twin->local_port = 1;
+					ctr->proxy_state = STATE_SYN_SENT;
+					ctr_twin->proxy_state = STATE_LISTEN;
+					change_dest(skb,IN_IP,210);
 				}
 				add_connection(ctr);
 				add_connection(ctr_twin);
@@ -556,21 +656,25 @@ static unsigned int fw_hook(void *priv, struct sk_buff *skb, const struct nf_hoo
     return NF_DROP; 
 }
 
+//catches the packets that are sent from the proxy to change its source
 static unsigned int local_hook(void *priv, struct sk_buff *skb, const struct nf_hook_state *state) {
     
     struct iphdr *ip_header = ip_hdr(skb);
     prot_t packet_protocol = ip_header->protocol;
+	//checks if loopback
     if (ip_check(ip_header->daddr,LOOPBACK_IP, LOOPBACK_MASK))
     {
         return NF_ACCEPT;
     }
 	
-    
+    //the proxy sends only tcp packet so other packets shouldnt be touched.
 	if ((packet_protocol != PROT_TCP)){
         return NF_ACCEPT;
     }
 
     struct tcphdr *tcp_header = tcp_hdr(skb);	
+	
+	//sent from http proxy
 	if(ntohs(tcp_header->source) == 800)
 	{
 		if (ntohs(tcp_header->dest) != 80)
@@ -583,6 +687,7 @@ static unsigned int local_hook(void *priv, struct sk_buff *skb, const struct nf_
 				if (found_bool && (ctr_temp->dst_ip == ip_header->daddr) && (ctr_temp->dst_port == ntohs(tcp_header->dest)) && (ctr_temp->src_port == 80))
 				{
 					change_source(skb,ctr_temp->src_ip,ctr_temp->src_port);
+					update_state_local(tcp_hdr(skb),ct_node->ctr->twin);
 					found_bool = 0;
 					return NF_ACCEPT;
 				}
@@ -595,13 +700,37 @@ static unsigned int local_hook(void *priv, struct sk_buff *skb, const struct nf_
 		}
 		return NF_ACCEPT;
 	}
-
-	else{
-		if (ntohs(tcp_header->dest) != 80)
+	//sent from ftp proxy
+	else if (ntohs(tcp_header->source) == 210)
+	{
+		if (ntohs(tcp_header->dest) != 21)
 		{
-			printk(KERN_INFO "local hook: ERROR got for user and excpected to server");
+			unsigned short found_bool = 1;
+			connection_table_node* ct_node;
+			connection_table_row_t* ctr_temp;
+			list_for_each_entry(ct_node, &connection_table_list, list){
+				ctr_temp = ct_node->ctr;
+				if (found_bool && (ctr_temp->dst_ip == ip_header->daddr) && (ctr_temp->dst_port == ntohs(tcp_header->dest)) && (ctr_temp->src_port == 21))
+				{
+					change_source(skb,ctr_temp->src_ip,ctr_temp->src_port);
+					update_state_local(tcp_hdr(skb),ct_node->ctr->twin);
+					found_bool = 0;
+					return NF_ACCEPT;
+				}
+			}
+
 		}
 		else {
+			printk(KERN_INFO "local hook: ERROR: got for server and expected to user");
+			
+		}
+		return NF_ACCEPT;
+	}
+	
+	else{
+		//sent from http proxy
+		if (ntohs(tcp_header->dest) == 80)
+		{
 			unsigned short found_bool = 1;
 			connection_table_node* ct_node;
 			connection_table_row_t* ctr_temp;
@@ -610,18 +739,39 @@ static unsigned int local_hook(void *priv, struct sk_buff *skb, const struct nf_
 				if (found_bool && (ctr_temp->dst_ip == ip_header->daddr) && (ctr_temp->dst_port == 80) && (ctr_temp->local_port == ntohs(tcp_header->source)))
 				{
 					change_source(skb,ctr_temp->src_ip,ctr_temp->src_port);
+					update_state_local(tcp_hdr(skb),ct_node->ctr->twin);
+					found_bool = 0;
+					return NF_ACCEPT;
+				}
+			}
+			
+		}
+		//sent from ftp proxy
+		else if (ntohs(tcp_header->dest) == 21)
+		{
+			unsigned short found_bool = 1;
+			connection_table_node* ct_node;
+			connection_table_row_t* ctr_temp;
+			list_for_each_entry(ct_node, &connection_table_list, list){
+				ctr_temp = ct_node->ctr;
+				if (found_bool && (ctr_temp->dst_ip == ip_header->daddr) && (ctr_temp->dst_port == 21) && (ctr_temp->local_port == ntohs(tcp_header->source)))
+				{
+					change_source(skb,ctr_temp->src_ip,ctr_temp->src_port);
+					update_state_local(tcp_hdr(skb),ct_node->ctr->twin);
 					found_bool = 0;
 					return NF_ACCEPT;
 				}
 			}
 		}
+		//got not from proxy.
 		return NF_ACCEPT;
 	}
 	
-	
+	//no reason to get here.
     return NF_ACCEPT; 
 }
 
+//init of the module
 static int __init mod_init_func(void){
 	printk(KERN_INFO "load module");
     
@@ -648,6 +798,7 @@ static int __init mod_init_func(void){
 		return -1;
 	}
 
+	//create sysfs device
     log_device = device_create(fw_class, NULL, MKDEV(major_number, MINOR_LOG), NULL, DEVICE_NAME_LOG);	
 	if (IS_ERR(log_device))
 	{
@@ -657,6 +808,7 @@ static int __init mod_init_func(void){
 		return -1;
 	}
 
+	//create sysfs device
 	conns_device = device_create(fw_class, NULL, MKDEV(major_number, MINOR_CONNS), NULL, DEVICE_NAME_CONN_TAB);	
 	if (IS_ERR(conns_device))
 	{
@@ -667,12 +819,26 @@ static int __init mod_init_func(void){
 		return -1;
 	}
 
-	http_driver = device_create(fw_class, NULL, MKDEV(major_number, MINOR_HTTP), NULL, "http_driver");	
-	if (IS_ERR(http_driver))
+	//create sysfs device
+	proxy_driver = device_create(fw_class, NULL, MKDEV(major_number, MINOR_PROXY), NULL, "proxy_driver");	
+	if (IS_ERR(proxy_driver))
 	{
 		device_destroy(fw_class, MKDEV(major_number, MINOR_RULES));
 		device_destroy(fw_class, MKDEV(major_number, MINOR_LOG));
 		device_destroy(fw_class, MKDEV(major_number, MINOR_CONNS));
+		class_destroy(fw_class);
+		unregister_chrdev(major_number, "fw");
+		return -1;
+	}
+
+	//create sysfs device
+	ftp_driver = device_create(fw_class, NULL, MKDEV(major_number, MINOR_FTP), NULL, "ftp_driver");	
+	if (IS_ERR(ftp_driver))
+	{
+		device_destroy(fw_class, MKDEV(major_number, MINOR_RULES));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_LOG));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_CONNS));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_PROXY));
 		class_destroy(fw_class);
 		unregister_chrdev(major_number, "fw");
 		return -1;
@@ -685,47 +851,72 @@ static int __init mod_init_func(void){
 		device_destroy(fw_class, MKDEV(major_number, MINOR_RULES));
 		device_destroy(fw_class, MKDEV(major_number, MINOR_LOG));
 		device_destroy(fw_class, MKDEV(major_number, MINOR_CONNS));
-		device_destroy(fw_class, MKDEV(major_number, MINOR_HTTP));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_PROXY));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_FTP));
 		class_destroy(fw_class);
 		unregister_chrdev(major_number, "fw");
 		return -1;
 	}
     
+	//create sysfs file attributes	
     if (device_create_file(log_device, (const struct device_attribute*) &dev_attr_reset.attr)) {
 		device_remove_file(rules_device, (const struct device_attribute*) &dev_attr_rules.attr); 
 		device_destroy(fw_class, MKDEV(major_number, MINOR_RULES));
 		device_destroy(fw_class, MKDEV(major_number, MINOR_LOG));
 		device_destroy(fw_class, MKDEV(major_number, MINOR_CONNS));
-		device_destroy(fw_class, MKDEV(major_number, MINOR_HTTP));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_PROXY));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_FTP));
 		class_destroy(fw_class);
 		unregister_chrdev(major_number, "fw");
 		return -1;
 	}
 
+	//create sysfs file attributes	
 	if (device_create_file(conns_device, (const struct device_attribute*) &dev_attr_conns.attr)) {
 		device_remove_file(rules_device, (const struct device_attribute*) &dev_attr_rules.attr); 
 		device_remove_file(log_device, (const struct device_attribute*) &dev_attr_reset.attr); 
 		device_destroy(fw_class, MKDEV(major_number, MINOR_RULES));
 		device_destroy(fw_class, MKDEV(major_number, MINOR_LOG));
 		device_destroy(fw_class, MKDEV(major_number, MINOR_CONNS));
-		device_destroy(fw_class, MKDEV(major_number, MINOR_HTTP));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_PROXY));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_FTP));
 		class_destroy(fw_class);
 		unregister_chrdev(major_number, "fw");
 		return -1;
 	}
-	if (device_create_file(http_driver, (const struct device_attribute*) &dev_attr_http.attr)) {
+
+	//create sysfs file attributes	
+	if (device_create_file(proxy_driver, (const struct device_attribute*) &dev_attr_proxy.attr)) {
 		device_remove_file(rules_device, (const struct device_attribute*) &dev_attr_rules.attr); 
 		device_remove_file(log_device, (const struct device_attribute*) &dev_attr_reset.attr); 
 		device_remove_file(conns_device, (const struct device_attribute*) &dev_attr_conns.attr); 
 		device_destroy(fw_class, MKDEV(major_number, MINOR_RULES));
 		device_destroy(fw_class, MKDEV(major_number, MINOR_LOG));
 		device_destroy(fw_class, MKDEV(major_number, MINOR_CONNS));
-		device_destroy(fw_class, MKDEV(major_number, MINOR_HTTP));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_PROXY));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_FTP));
 		class_destroy(fw_class);
 		unregister_chrdev(major_number, "fw");
 		return -1;
 	}
 
+	//create sysfs file attributes	
+	if (device_create_file(ftp_driver, (const struct device_attribute*) &dev_attr_ftp.attr)) {
+		device_remove_file(rules_device, (const struct device_attribute*) &dev_attr_rules.attr); 
+		device_remove_file(log_device, (const struct device_attribute*) &dev_attr_reset.attr); 
+		device_remove_file(conns_device, (const struct device_attribute*) &dev_attr_conns.attr); 
+		device_remove_file(proxy_driver, (const struct device_attribute*) &dev_attr_proxy.attr); 
+		device_destroy(fw_class, MKDEV(major_number, MINOR_RULES));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_LOG));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_CONNS));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_PROXY));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_FTP));
+		class_destroy(fw_class);
+		unregister_chrdev(major_number, "fw");
+		return -1;
+	}
+
+	//create hooks
 	hook_fw.hook = (nf_hookfn*)fw_hook;
 	hook_fw.pf = PF_INET;
 	hook_fw.priority = NF_IP_PRI_FIRST;
@@ -734,11 +925,13 @@ static int __init mod_init_func(void){
         device_remove_file(log_device, (const struct device_attribute*) &dev_attr_reset.attr); 
 	    device_remove_file(rules_device, (const struct device_attribute*) &dev_attr_rules.attr); 
 		device_remove_file(conns_device, (const struct device_attribute*) &dev_attr_conns.attr); 
-		device_remove_file(http_driver, (const struct device_attribute*) &dev_attr_http.attr); 
+		device_remove_file(proxy_driver, (const struct device_attribute*) &dev_attr_proxy.attr); 
+		device_remove_file(ftp_driver, (const struct device_attribute*) &dev_attr_ftp.attr); 
 	    device_destroy(fw_class,  MKDEV(major_number, MINOR_RULES));
 	    device_destroy(fw_class,  MKDEV(major_number, MINOR_LOG));
 		device_destroy(fw_class, MKDEV(major_number, MINOR_CONNS));
-		device_destroy(fw_class, MKDEV(major_number, MINOR_HTTP));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_PROXY));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_FTP));
 	    class_destroy(fw_class);
 	    unregister_chrdev(major_number, "fw");
     }
@@ -751,15 +944,17 @@ static int __init mod_init_func(void){
         device_remove_file(log_device, (const struct device_attribute*) &dev_attr_reset.attr); 
 	    device_remove_file(rules_device, (const struct device_attribute*) &dev_attr_rules.attr); 
 		device_remove_file(conns_device, (const struct device_attribute*) &dev_attr_conns.attr); 
-		device_remove_file(http_driver, (const struct device_attribute*) &dev_attr_http.attr); 
+		device_remove_file(proxy_driver, (const struct device_attribute*) &dev_attr_proxy.attr); 
+		device_remove_file(ftp_driver, (const struct device_attribute*) &dev_attr_ftp.attr); 
 	    device_destroy(fw_class,  MKDEV(major_number, MINOR_RULES));
 	    device_destroy(fw_class,  MKDEV(major_number, MINOR_LOG));
 		device_destroy(fw_class, MKDEV(major_number, MINOR_CONNS));
-		device_destroy(fw_class, MKDEV(major_number, MINOR_HTTP));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_PROXY));
+		device_destroy(fw_class, MKDEV(major_number, MINOR_FTP));
 	    class_destroy(fw_class);
 	    unregister_chrdev(major_number, "fw");
     }
-	//nf_unregister_net_hook(&init_net,&hook_local);
+
 
     memset(rules_table, 0, MAX_RULES * sizeof(rule_t));
 
@@ -767,17 +962,20 @@ static int __init mod_init_func(void){
     return 0;
 }
 
+//exit of the module.
 static void __exit mod_exit_func(void){
 	nf_unregister_net_hook(&init_net,&hook_fw);
 	nf_unregister_net_hook(&init_net,&hook_local);
 	device_remove_file(log_device, (const struct device_attribute*) &dev_attr_reset.attr); 
 	device_remove_file(rules_device, (const struct device_attribute*) &dev_attr_rules.attr); 
 	device_remove_file(conns_device, (const struct device_attribute*) &dev_attr_conns.attr); 
-	device_remove_file(http_driver, (const struct device_attribute*) &dev_attr_http.attr); 
+	device_remove_file(proxy_driver, (const struct device_attribute*) &dev_attr_proxy.attr); 
+	device_remove_file(ftp_driver, (const struct device_attribute*) &dev_attr_ftp.attr); 
 	device_destroy(fw_class,  MKDEV(major_number, MINOR_RULES));
 	device_destroy(fw_class,  MKDEV(major_number, MINOR_LOG));
 	device_destroy(fw_class, MKDEV(major_number, MINOR_CONNS));
-	device_destroy(fw_class, MKDEV(major_number, MINOR_HTTP));
+	device_destroy(fw_class, MKDEV(major_number, MINOR_PROXY));
+	device_destroy(fw_class, MKDEV(major_number, MINOR_FTP));
 	class_destroy(fw_class);
 	unregister_chrdev(major_number, "fw");
 

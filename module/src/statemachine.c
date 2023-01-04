@@ -1,9 +1,11 @@
+#include "fw.h"
 #include "state.h"
+
 
 //state is the state of the sender
 unsigned int update_state_listen(struct tcphdr* hdr, connection_table_row_t* ctr){
-    if (tcp_flag_word(hdr) & (TCP_FLAG_SYN | TCP_FLAG_ACK))
-    {
+    if ((tcp_flag_word(hdr) & (TCP_FLAG_SYN | TCP_FLAG_ACK)) == (TCP_FLAG_SYN | TCP_FLAG_ACK))
+    {   
         ctr->state = STATE_SYN_RECIVED;
         return NF_ACCEPT;
     }
@@ -12,15 +14,36 @@ unsigned int update_state_listen(struct tcphdr* hdr, connection_table_row_t* ctr
 }
 
 unsigned int update_state_syn_sent(struct tcphdr* hdr, connection_table_row_t* ctr){
-    if (tcp_flag_word(hdr) & (TCP_FLAG_SYN | TCP_FLAG_ACK))
+    if ((tcp_flag_word(hdr) & (TCP_FLAG_SYN | TCP_FLAG_ACK)) == (TCP_FLAG_SYN | TCP_FLAG_ACK))
     {
-        //handle error
         return NF_DROP;
     }
     else if (tcp_flag_word(hdr) & (TCP_FLAG_ACK))
     {
         ctr->state = STATE_ESTABLISHED_TCP;
         ctr->twin->state = STATE_ESTABLISHED_TCP;
+        if (hdr->dest == ntohs(80))
+        {
+            ctr->state = STATE_ESTABLISHED_HTTP;
+            ctr->twin->state = STATE_ESTABLISHED_HTTP;
+            ctr->proxy_state = STATE_ESTABLISHED_HTTP;
+            ctr->twin->proxy_state = STATE_ESTABLISHED_HTTP;
+            
+        }
+        if (hdr->dest == ntohs(21))
+        {
+            ctr->state = STATE_ESTABLISHED_FTP_CON;
+            ctr->twin->state = STATE_ESTABLISHED_FTP_CON;
+            ctr->proxy_state = STATE_ESTABLISHED_FTP_CON;
+            ctr->twin->proxy_state = STATE_ESTABLISHED_FTP_CON;
+        }
+        if (hdr->source == ntohs(20))
+        {
+            ctr->state = STATE_ESTABLISHED_FTP_DATA;
+            ctr->twin->state = STATE_ESTABLISHED_FTP_DATA;
+        }
+        
+        
         return NF_ACCEPT;
     }
     return NF_DROP;
@@ -58,6 +81,30 @@ unsigned int update_state_established(struct tcphdr* hdr, connection_table_row_t
     }
     return NF_ACCEPT;
 }
+unsigned int proxy(struct tcphdr* hdr, connection_table_row_t* ctr){
+    if (tcp_flag_word(hdr) & (TCP_FLAG_FIN)){
+        if ((ctr->proxy_state == STATE_ESTABLISHED_HTTP) || (ctr->proxy_state == STATE_ESTABLISHED_FTP_CON))
+        {
+            ctr->proxy_state = STATE_FIN_WAIT_1;
+            return NF_ACCEPT;
+        }
+        if (ctr->proxy_state == STATE_CLOSE_WAIT)
+        {
+            ctr->proxy_state = STATE_LAST_ACK;
+            return NF_ACCEPT;
+        }
+ 
+        return NF_ACCEPT;
+    }
+    if (ctr->proxy_state == STATE_FIN_WAIT_2)
+        {
+            ctr->proxy_state = STATE_CLOSED;
+            ctr->state = STATE_CLOSED;
+            return NF_ACCEPT;
+        }
+    return NF_ACCEPT;
+}
+
 
 unsigned int update_state(struct tcphdr* hdr, connection_table_row_t* ctr){
     switch (ctr->state)
@@ -83,11 +130,42 @@ unsigned int update_state(struct tcphdr* hdr, connection_table_row_t* ctr){
     case STATE_CLOSED:
         return update_state_closed(hdr , ctr);
         break;
-    //Established cases
-    default:
+    case STATE_ESTABLISHED_TCP:
         return update_state_established(hdr, ctr);
         break;
+    case STATE_ESTABLISHED_FTP_DATA:
+        return update_state_established(hdr,ctr);
+    //proxy cases:
+    default:
+        return proxy(hdr,ctr);
+        break;
     }
+    
+    
     //shouldn't get here
     return NF_DROP;
+}
+
+void update_state_local(struct tcphdr* hdr, connection_table_row_t* ctr){
+    if (tcp_flag_word(hdr) & (TCP_FLAG_FIN)){
+        if ((ctr->proxy_state == STATE_ESTABLISHED_HTTP) || (ctr->proxy_state == STATE_ESTABLISHED_FTP_CON))
+        {
+            ctr->proxy_state = STATE_CLOSE_WAIT;
+            return;
+        }
+        
+        if (ctr->proxy_state == STATE_FIN_WAIT_1)
+        {
+            ctr->proxy_state = STATE_FIN_WAIT_2;
+            return;
+        }
+        
+    }
+    if (ctr->proxy_state == STATE_LAST_ACK)
+        {
+            ctr->proxy_state = STATE_CLOSED;
+            ctr->state = STATE_CLOSED;
+            return;
+        }
+    
 }

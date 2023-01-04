@@ -83,6 +83,7 @@ typedef struct connection_table_row_ts
 	unsigned short	dst_port; 
 	unsigned short 	local_port;
 	state_t state;
+    state_t proxy_state;
 	struct connection_table_row_ts* twin;
 } connection_table_row_t;
 

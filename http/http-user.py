@@ -4,6 +4,7 @@ import ipaddress
 import http_driver as hd
 import threading
 
+#checks if this is a valid http response.
 def valid_http_resp(data):
     header = data.split(sep="{s1}{s2}".format(s1=os.linesep, s2=os.linesep))[0]
     content_type = [field for field in header.splitlines() if "Content-Type" in field]
@@ -17,27 +18,20 @@ def thread_func(client_socket, client_address):
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             original_ip = ipaddress.IPv4Address(client_address[0])
-            print("accepted comms from: {p}".format(p=client_address))
-            print("ip: {ip}, port: {port}".format(ip=socket.htonl(int(original_ip)), port=client_address[1]))
             new_ip = ipaddress.IPv4Address(socket.ntohl(hd.fit2(socket.htonl(int(original_ip)), client_address[1])))
-            print("new_ip: {ip}".format(ip=str(new_ip)))
             server_socket.bind(("", 0))
             hd.fit(socket.htonl(int(original_ip)), client_address[1], socket.htonl(int(new_ip)), 80,
                    server_socket.getsockname()[1])
             server_socket.connect((str(new_ip), 80))
-            print("connected to: {p}".format(p=server_socket.getpeername()))
             while True:
                 data = client_socket.recv(2 ** 14).decode()
                 if not data:
                     break
-                print("data:")
-                print(data)
                 try:
                     while True:
                         data += client_socket.recv(2 ** 14, socket.MSG_DONTWAIT).decode()
                 except:
                     pass
-                # print(data)
                 server_socket.sendall(data.encode())
                 data2 = server_socket.recv(2 ** 14).decode()
                 if not data2:
@@ -59,7 +53,6 @@ if __name__ == '__main__':
     client_socket_bind = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client_socket_bind.bind(("", 800))
     client_socket_bind.listen()
-    print("server up")
     thread_list = []
     try:
         while True:
@@ -69,5 +62,3 @@ if __name__ == '__main__':
             thread.start()
     finally:
         client_socket_bind.close()
-        for thread in thread_list:
-            thread.join()
